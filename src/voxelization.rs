@@ -422,6 +422,7 @@ pub struct Blueprint {
     core_id: u64,
     bounds: Aabb,
     voxel_data: Vec<VoxelData>,
+    is_static : bool
 }
 
 impl Blueprint {
@@ -431,6 +432,7 @@ impl Blueprint {
         core_id: u64,
         bounds: Aabb,
         voxel_data: Vec<VoxelData>,
+        is_static : bool
     ) -> Blueprint {
         Blueprint {
             name,
@@ -438,6 +440,7 @@ impl Blueprint {
             core_id,
             bounds,
             voxel_data,
+            is_static,
         }
     }
 
@@ -474,7 +477,7 @@ impl Blueprint {
                     "isNPC": false,
                     "isUntargetable": false
                 },
-                "Static": false,
+                "Static": self.is_static,
                 "Bounds": {
                     "min": { "x": self.bounds.mins.x, "y": self.bounds.mins.y, "z": self.bounds.mins.z },
                     "max": { "x": self.bounds.maxs.x, "y": self.bounds.maxs.y, "z": self.bounds.maxs.z }

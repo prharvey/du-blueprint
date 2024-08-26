@@ -16,6 +16,41 @@ use crate::voxelization::*;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum CoreType {
+    Dynamic,
+    Static,
+    Space,
+}
+
+impl CoreType {
+    fn element_id(&self, size: CoreSize) -> u64 {
+        match self {
+            CoreType::Dynamic => match size {
+                CoreSize::XS => 183890713,
+                CoreSize::S => 183890525,
+                CoreSize::M => 1418170469,
+                CoreSize::L => 1417952990,
+                CoreSize::XL => 1417997710,
+            },
+            CoreType::Static => match size {
+                CoreSize::XS => 2738359963,
+                CoreSize::S => 2738359893,
+                CoreSize::M => 909184430,
+                CoreSize::L => 910155097,
+                CoreSize::XL => 909203438,
+            },
+            CoreType::Space => match size {
+                CoreSize::XS => 3624942103,
+                CoreSize::S => 3624940909,
+                CoreSize::M => 5904195,
+                CoreSize::L => 5904544,
+                CoreSize::XL => panic!("Space cores do not come in XL."),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum CoreSize {
     XS,
@@ -31,31 +66,32 @@ struct CoreInfo {
     height: usize,
 }
 
-impl CoreSize {
-    fn info(&self) -> CoreInfo {
-        match self {
+impl CoreInfo {
+    fn from(size: CoreSize, core_type: CoreType) -> CoreInfo {
+        let id = core_type.element_id(size);
+        match size {
             CoreSize::XS => CoreInfo {
-                element_id: 183890713,
+                element_id: id,
                 size: 32,
                 height: 5,
             },
             CoreSize::S => CoreInfo {
-                element_id: 183890525,
+                element_id: id,
                 size: 64,
                 height: 6,
             },
             CoreSize::M => CoreInfo {
-                element_id: 1418170469,
+                element_id: id,
                 size: 128,
                 height: 7,
             },
             CoreSize::L => CoreInfo {
-                element_id: 1417952990,
+                element_id: id,
                 size: 256,
                 height: 8,
             },
             CoreSize::XL => CoreInfo {
-                element_id: 1417997710,
+                element_id: id,
                 size: 512,
                 height: 9,
             },
@@ -92,7 +128,10 @@ enum Commands {
         output: PathBuf,
 
         #[arg(short, long, value_enum)]
-        core: CoreSize,
+        r#type: CoreType,
+
+        #[arg(short, long, value_enum)]
+        size: CoreSize,
 
         /// Voxel material ID
         #[arg(short, long, default_value_t = 1971262921)]
@@ -119,7 +158,8 @@ fn main() {
         Commands::Generate {
             input,
             output,
-            core,
+            size,
+            r#type,
             material,
             scale,
         } => {
@@ -163,7 +203,7 @@ fn main() {
             )
             .unwrap();
 
-            let core_info = core.info();
+            let core_info = CoreInfo::from(size, r#type);
 
             // TODO: allow translations and rotations
             let isometry = Isometry::default();
@@ -195,6 +235,7 @@ fn main() {
                 core_info.element_id,
                 aabb,
                 voxel_data,
+                r#type != CoreType::Dynamic,
             );
             File::create(output)
                 .unwrap()
