@@ -1,0 +1,20 @@
+[package]
+name = "du-blueprint"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lz4 = "1.23.1"
+base64 = "0.22.1"
+xxhash-rust = { version="0.8.12", features=["xxh64"] }
+parry3d-f64 = "0.17.0"
+rangemap = "1.5.1"
+serde_json = "1.0"
+chrono = "0.4.38"
+tobj = { version = "4.0.2", features=["merging"] }
+rayon = "1.10.0"
+ordered-float = "4.2.2"
+clap = { version = "4.5.16", features = ["derive"] }
+
+[profile.release]
+debug = true
