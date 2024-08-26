@@ -3,7 +3,9 @@
 A tool for generating Dual Universe blueprint files from models.
 
 Quick start:
-```du-blueprint generate --auto --core=l my_model.obj my_blueprint.blueprint```
+```
+du-blueprint generate --auto --core=l my_model.obj my_blueprint.blueprint
+```
 
 The only supported format at the moment is `.obj`. For good results, use a manifold mesh.
 For best results, take into account in game voxel limitations when making your model.
