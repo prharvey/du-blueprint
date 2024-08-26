@@ -209,14 +209,14 @@ fn main() {
             let isometry = Isometry::default();
 
             let height = core_info.height - 3;
+            let aabb = mesh.aabb(&isometry);
             let svo_aabb = if scale.auto {
-                let aabb = mesh.aabb(&isometry);
                 let scale = Vector::repeat(aabb.extents().max()).component_div(&aabb.extents());
                 aabb.scaled_wrt_center(&scale)
                     .scaled_wrt_center(&Vector::repeat(2.0))
             } else {
                 let extents = Vector::repeat(4.0 * (1 << height) as f64);
-                Aabb::from_half_extents(Point::origin(), extents / scale.scale)
+                Aabb::from_half_extents(aabb.center(), extents / scale.scale)
             };
 
             let svo = Lod::voxelize(&isometry, &mesh, &svo_aabb, height, material);
