@@ -202,6 +202,7 @@ fn voxelize_chunk(
     mesh: &TriMesh,
     aabb: &Aabb,
     voxel_origin: &Point<i32>,
+    material : u64
 ) -> Option<VoxelCellData> {
     // We have to over-voxelize that chunk due to weird boundries expected in voxel cell data.
     // e.g. for an inner_range of [0, 0, 0] -> [32, 32, 32] the actual range of the chunk is
@@ -246,8 +247,8 @@ fn voxelize_chunk(
     mapping.insert(
         2,
         MaterialId {
-            id: 1971262921,
-            short_name: "Aluminiu".into(),
+            id: material,
+            short_name: "Material".into(),
         },
     );
 
@@ -267,15 +268,16 @@ impl LodNode {
         aabb: &Aabb,
         origin: Point<i32>,
         height: usize,
+        material : u64
     ) -> LodNode {
         if height == 0 {
-            return LodNode::Leaf(voxelize_chunk(isometry, mesh, aabb, &(origin * 32)));
+            return LodNode::Leaf(voxelize_chunk(isometry, mesh, aabb, &(origin * 32), material));
         }
         let extent = 1 << height;
         let parent_origin = origin / extent as i32;
         let octants = aabb.split_at_center();
         let (me, children) = rayon::join(
-            || voxelize_chunk(isometry, mesh, aabb, &(parent_origin * 32)),
+            || voxelize_chunk(isometry, mesh, aabb, &(parent_origin * 32), material),
             || {
                 octants
                     .par_iter()
@@ -284,7 +286,7 @@ impl LodNode {
                         let offset = Vector::from_row_slice(offset);
                         let half_extent = extent / 2;
                         let origin = origin + offset * half_extent as i32;
-                        LodNode::voxelize(isometry, mesh, &aabb, origin, height - 1)
+                        LodNode::voxelize(isometry, mesh, &aabb, origin, height - 1, material)
                     })
                     .collect::<Vec<_>>()
             },
@@ -296,6 +298,7 @@ impl LodNode {
         &self,
         coords: Point<i32>,
         height: usize,
+        material : u64,
         result: &mut Vec<VoxelData>,
     ) -> AggregateMetadata {
         match self {
@@ -304,7 +307,7 @@ impl LodNode {
                 let voxels_hash = hash(&voxels_compressed);
                 let voxels_b64 = BASE64_STANDARD.encode(voxels_compressed);
 
-                let meta = voxels.calculate_metadata(voxels_hash);
+                let meta = voxels.calculate_metadata(voxels_hash, material);
                 let meta_compressed = meta.compress().unwrap();
                 let meta_hash = hash(&meta_compressed);
                 let meta_b64 = BASE64_STANDARD.encode(meta_compressed);
@@ -330,7 +333,7 @@ impl LodNode {
                     Vec::from_iter(children.iter().zip(&OFFSETS).map(|(child, offset)| {
                         let half_extent = extent / 2;
                         let origin = coords + Vector::from_row_slice(offset) * half_extent;
-                        child.make_voxel_data(origin, height - 1, result)
+                        child.make_voxel_data(origin, height - 1, material, result)
                     }));
                 let meta = AggregateMetadata::combine(voxels_hash, &children);
                 let meta_compressed = meta.compress().unwrap();
@@ -359,18 +362,18 @@ pub struct Lod {
 }
 
 impl Lod {
-    pub fn voxelize(isometry: &Isometry<f64>, mesh: &TriMesh, aabb: &Aabb, height: usize) -> Lod {
+    pub fn voxelize(isometry: &Isometry<f64>, mesh: &TriMesh, aabb: &Aabb, height: usize, material : u64) -> Lod {
         Lod {
-            root: LodNode::voxelize(isometry, mesh, &aabb, Point::origin(), height),
+            root: LodNode::voxelize(isometry, mesh, &aabb, Point::origin(), height, material),
             height,
         }
     }
 
-    pub fn make_voxel_data(&self) -> (Vec<VoxelData>, RangeZYX) {
+    pub fn make_voxel_data(&self, material : u64) -> (Vec<VoxelData>, RangeZYX) {
         let mut result = Vec::new();
         let meta = self
             .root
-            .make_voxel_data(Point::origin(), self.height, &mut result);
+            .make_voxel_data(Point::origin(), self.height, material, &mut result);
         (result, meta.heavy_current.bounding_box.unwrap())
     }
 }

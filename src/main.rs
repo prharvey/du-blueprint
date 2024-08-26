@@ -94,6 +94,10 @@ enum Commands {
         #[arg(short, long, value_enum)]
         core: CoreSize,
 
+        /// Voxel material ID
+        #[arg(short, long, default_value_t = 1971262921)]
+        material: u64,
+
         #[command(flatten)]
         scale: ScaleInfo,
     },
@@ -116,6 +120,7 @@ fn main() {
             input,
             output,
             core,
+            material,
             scale,
         } => {
             let (models, _) = tobj::load_obj(
@@ -174,8 +179,8 @@ fn main() {
                 Aabb::from_half_extents(Point::origin(), extents / scale.scale)
             };
 
-            let svo = Lod::voxelize(&isometry, &mesh, &svo_aabb, height);
-            let (voxel_data, bb) = svo.make_voxel_data();
+            let svo = Lod::voxelize(&isometry, &mesh, &svo_aabb, height, material);
+            let (voxel_data, bb) = svo.make_voxel_data(material);
             let mins = (bb.origin.map(|v| v as f64) - Vector::repeat(64.0)) / 4.0;
             let aabb = Aabb::new(mins, mins + bb.size.map(|v| v as f64) / 4.0);
             let bp = Blueprint::new(

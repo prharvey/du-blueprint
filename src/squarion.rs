@@ -644,7 +644,7 @@ impl VertexGrid {
             .for_each_index_range(subrange, |r| self.sparse_vertices.insert(r, voxel))
     }
 
-    pub fn calculate_metadata(&self) -> HeavyMetadata {
+    pub fn calculate_metadata(&self, material_id : u64) -> HeavyMetadata {
         let mut min_pos = Point::new(i32::MAX, i32::MAX, i32::MAX);
         let mut max_pos = Point::new(i32::MIN, i32::MIN, i32::MIN);
         let mut total_materials = 0;
@@ -669,8 +669,8 @@ impl VertexGrid {
         let mut material_stats = BTreeMap::new();
         material_stats.insert(
             MaterialId {
-                id: 1971262921,
-                short_name: "Aluminiu".into(),
+                id: material_id,
+                short_name: "Material".into(),
             },
             mat_count,
         );
@@ -826,9 +826,9 @@ impl VoxelCellData {
         }
     }
 
-    pub fn calculate_metadata(&self, hash: i64) -> AggregateMetadata {
+    pub fn calculate_metadata(&self, hash: i64, material : u64) -> AggregateMetadata {
         let mut light_current = LightMetadata::default();
-        let heavy_current = self.grid.calculate_metadata();
+        let heavy_current = self.grid.calculate_metadata(material);
         light_current.vox = Some(heavy_current.material_stats.is_some());
         light_current.r#mod = Some(true);
         light_current.hash_voxel = Some(hash);
