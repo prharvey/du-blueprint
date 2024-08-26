@@ -4,7 +4,7 @@ A tool for generating Dual Universe blueprint files from models.
 
 Quick start:
 ```
-du-blueprint generate --auto --core=l my_model.obj my_blueprint.blueprint
+du-blueprint generate --auto --type=dynamic --size=l my_model.obj my_blueprint.blueprint
 ```
 
 The only supported format at the moment is `.obj`. For good results, use a manifold mesh.
@@ -19,7 +19,12 @@ at the problem.
 
 ## FAQ
 
-### Q. My model has weird floating boxes.
+### Q. My construct has a weird orientation
+
+Make sure the model orientation matches DU expections. DU is Z-up and Y-forward; many models
+are Y-up.
+
+### Q. My construct has weird floating boxes.
 
 You tried to import a non-manifold mesh. The voxelizer tries it's best to account
 for this, but it isn't perfect.
