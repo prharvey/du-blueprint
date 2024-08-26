@@ -15,14 +15,14 @@ on something beforehand.
 Right now the voxelization process is pretty naive and unoptimized, and just throws threads
 at the problem.
 
-# FAQ
+## FAQ
 
-## Q. My model has weird floating boxes.
+### Q. My model has weird floating boxes.
 
-A. You tried to import a non-manifold mesh. The voxelizer tries it's best to account
+You tried to import a non-manifold mesh. The voxelizer tries it's best to account
 for this, but it isn't perfect.
 
-## Q. How can I make my mesh manifold?
+### Q. How can I make my mesh manifold?
 
 Blender. Search for a tutorial on the "3D-Print Toolbox" addon; this is a common problem
 with 3D printing.
