@@ -19,12 +19,12 @@ at the problem.
 
 ## FAQ
 
-### Q. My construct has a weird orientation
+### Q. Why does my construct have a weird orientation?
 
 Make sure the model orientation matches DU expections. DU is Z-up and Y-forward; many models
 are Y-up.
 
-### Q. My construct has weird floating boxes.
+### Q. Why does my construct have weird floating boxes?
 
 You tried to import a non-manifold mesh. The voxelizer tries it's best to account
 for this, but it isn't perfect.
