@@ -221,7 +221,7 @@ fn main() {
 
             let svo = Lod::voxelize(&isometry, &mesh, &svo_aabb, height, material);
             let (voxel_data, bb) = svo.make_voxel_data(material);
-            let mins = (bb.origin.map(|v| v as f64) - Vector::repeat(64.0)) / 4.0;
+            let mins = bb.origin.map(|v| v as f64) / 4.0;
             let aabb = Aabb::new(mins, mins + bb.size.map(|v| v as f64) / 4.0);
             let bp = Blueprint::new(
                 input
