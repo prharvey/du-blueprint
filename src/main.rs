@@ -113,7 +113,7 @@ struct ScaleInfo {
     #[arg(short, long)]
     auto: bool,
 
-    #[arg(short, long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.0)]
     scale: f64,
 }
 
