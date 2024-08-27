@@ -523,11 +523,28 @@ pub struct RangeZYX {
 }
 
 impl RangeZYX {
+    // The order here matches the order in Aabb::split_at_center()
+    pub const OFFSETS: [[i32; 3]; 8] = [
+        [0, 0, 0],
+        [1, 0, 0],
+        [1, 1, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+        [1, 0, 1],
+        [1, 1, 1],
+        [0, 1, 1],
+    ];
+
     pub fn with_extent(origin: Point<i32>, extent: i32) -> RangeZYX {
         assert!(extent >= 0);
+        RangeZYX::with_extents(origin, Vector::repeat(extent))
+    }
+
+    pub fn with_extents(origin: Point<i32>, extents: Vector<i32>) -> RangeZYX {
+        assert!(extents.min() >= 0);
         RangeZYX {
             origin,
-            size: Vector::repeat(extent),
+            size: extents,
         }
     }
 
@@ -535,11 +552,11 @@ impl RangeZYX {
         RangeZYX::with_extent(origin, 1)
     }
 
-    fn volume(&self) -> u64 {
+    pub fn volume(&self) -> u64 {
         self.size.x.abs() as u64 * self.size.y.abs() as u64 * self.size.z.abs() as u64
     }
 
-    fn intersection(&self, other: &RangeZYX) -> RangeZYX {
+    pub fn intersection(&self, other: &RangeZYX) -> RangeZYX {
         let origin = self.origin.sup(&other.origin);
         let end = (self.origin + self.size).inf(&(other.origin + other.size));
         let size = (end - origin).sup(&Vector::zeros());
@@ -582,6 +599,14 @@ impl RangeZYX {
 
     fn position_from_index(&self, index: usize) -> Point<i32> {
         self.origin + self.relative_position_from_index(index)
+    }
+
+    pub fn split_at_center(&self) -> [RangeZYX; 8] {
+        let half_extents = self.size / 2;
+        Self::OFFSETS.map(|[x, y, z]| {
+            let offset = half_extents.component_mul(&Vector::new(x, y, z));
+            RangeZYX::with_extents(self.origin + offset, half_extents)
+        })
     }
 }
 

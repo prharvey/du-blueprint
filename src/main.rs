@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -10,6 +12,7 @@ use squarion::{AggregateMetadata, Deserialize, VoxelCellData};
 use tobj::LoadOptions;
 
 mod squarion;
+mod svo;
 mod voxelization;
 
 use crate::voxelization::*;

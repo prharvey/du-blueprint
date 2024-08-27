@@ -1,5 +1,5 @@
 use core::f64;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 
 use base64::prelude::*;
@@ -13,10 +13,68 @@ use rayon::prelude::*;
 use serde_json::json;
 
 use crate::squarion::*;
+use crate::svo::*;
+
+#[derive(Debug, Clone, PartialEq)]
+enum Voxel {
+    Internal,
+    Boundry(bool),
+}
+
+fn voxelize(
+    isometry: &Isometry<f64>,
+    mesh: &TriMesh,
+    aabb: &Aabb,
+    origin: Point<i32>,
+    extent: usize,
+    clip_range: &RangeZYX,
+) -> Svo<Voxel> {
+    let voxel_size = aabb.extents().x / extent as f64;
+    Svo::from_fn(origin, extent, &|range| {
+        if range.intersection(clip_range).volume() == 0 {
+            return SvoReturn::Leaf(None);
+        }
+
+        let mins = aabb.mins + (range.origin - origin).map(|v| v as f64) * voxel_size;
+        let maxs = mins + range.size.map(|v| v as f64) * voxel_size;
+        let aabb = Aabb::new(mins, maxs);
+
+        // Scale up the region slightly. Makes intersection detection more robust.
+        let cuboid = Cuboid::new(aabb.half_extents() * 1.05);
+        let cuboid_pos = Isometry::from(aabb.center());
+        if !intersection_test(isometry, mesh, &cuboid_pos, &cuboid).unwrap() {
+            // Vote on if the voxel is inside or outside. We need to do this because some people won't
+            // read the FAQ, and try to import non-manifold meshes. This makes the process more reliable.
+            let mut inside_count = mesh.contains_point(isometry, &aabb.center()) as u32;
+            for point in aabb.vertices() {
+                inside_count += mesh.contains_point(isometry, &point) as u32
+            }
+            // Bias towards assuming outside, since it's better to have empty internals than random
+            // floating cubes.
+            if inside_count >= 7 {
+                return SvoReturn::Leaf(Some(Voxel::Internal));
+            } else {
+                return SvoReturn::Leaf(None);
+            }
+        }
+        if range.volume() == 1 {
+            // We do a quick check to see if the voxel is "significant", i.e. the center is in the mesh
+            // or the middle of the voxel intersects the mesh.
+            //
+            // This helps remove artifacts from internal angles in the model.
+            let sphere = Ball::new(aabb.half_extents().x / 1.3);
+            let sphere_pos = Isometry::from(aabb.center());
+            let significant = mesh.contains_point(isometry, &aabb.center())
+                || intersection_test(isometry, mesh, &sphere_pos, &sphere).unwrap();
+            return SvoReturn::Leaf(Some(Voxel::Boundry(significant)));
+        }
+        SvoReturn::Continue
+    })
+}
 
 // Tries to snap to the nearest vertex, then edge, then face.
 //
-// Results in some artifacts in game where too many voxels snap to a vertex/edge and as a result 
+// Results in some artifacts in game where too many voxels snap to a vertex/edge and as a result
 // you get some weird shadows on flat surfaces, but this otherwise preserves the model features.
 fn calculate_vertex_position(isometry: &Isometry<f64>, mesh: &TriMesh, aabb: &Aabb) -> Point<f64> {
     let pos = aabb.center();
@@ -48,151 +106,44 @@ fn calculate_vertex_position(isometry: &Isometry<f64>, mesh: &TriMesh, aabb: &Aa
     }
 }
 
-#[derive(Debug, Clone)]
-enum Voxel {
-    Inside,
-    Outside,
-    Boundry(bool),
-}
+fn extract_vertices(
+    voxels: &Svo<Voxel>,
+    isometry: &Isometry<f64>,
+    mesh: &TriMesh,
+    aabb: &Aabb,
+    origin: Point<i32>,
+) -> HashMap<Point<i32>, Point<u8>> {
+    let voxel_size = aabb.extents().x / voxels.range.size.x as f64;
+    let significant_points = voxels.fold(HashSet::new(), &|mut acc, range, v| {
+        match v {
+            Voxel::Internal => (),
+            Voxel::Boundry(significant) => {
+                assert_eq!(range.volume(), 1);
+                for offset in &RangeZYX::OFFSETS {
+                    let offset = Vector::from_row_slice(offset);
+                    let point = &range.origin + offset;
 
-// The order here matches the order in Aabb::split_at_center()
-const OFFSETS: [[i32; 3]; 8] = [
-    [0, 0, 0],
-    [1, 0, 0],
-    [1, 1, 0],
-    [0, 1, 0],
-    [0, 0, 1],
-    [1, 0, 1],
-    [1, 1, 1],
-    [0, 1, 1],
-];
-
-#[derive(Debug, Clone)]
-enum Svo {
-    Leaf(Voxel),
-    Internal(Box<[Svo; 8]>),
-}
-
-impl Svo {
-    fn voxelize(isometry: &Isometry<f64>, mesh: &TriMesh, aabb: &Aabb, height: usize) -> Self {
-        // Scale up the region slightly. Makes intersection detection more robust.
-        let cuboid = Cuboid::new(aabb.half_extents() * 1.05);
-        let cuboid_pos = Isometry::from(aabb.center());
-        if !intersection_test(isometry, mesh, &cuboid_pos, &cuboid).unwrap() {
-            // Vote on if the voxel is inside or outside. We need to do this because some people won't
-            // read the FAQ, and try to import non-manifold meshes. This makes the process more reliable.
-            let mut inside_count = mesh.contains_point(isometry, &aabb.center()) as u32;
-            for point in aabb.vertices() {
-                inside_count += mesh.contains_point(isometry, &point) as u32
+                    let pos = aabb.mins + voxel_size * (point - origin).map(|v| v as f64);
+                    if mesh.contains_point(isometry, &pos) != *significant {
+                        acc.insert(point);
+                    }
+                }
             }
-            // Bias towards assuming outside, since it's better to have empty internals than random
-            // floating cubes.
-            if inside_count >= 7 {
-                return Svo::Leaf(Voxel::Inside);
-            } else {
-                return Svo::Leaf(Voxel::Outside);
-            }
-        }
-        if height == 0 {
-            // We do a quick check to see if the voxel is "significant", i.e. the center is in the mesh
-            // or the middle of the voxel intersects the mesh.
-            //
-            // This helps remove artifacts from internal angles in the model.
-            let sphere = Ball::new(aabb.half_extents().x / 1.3);
-            let sphere_pos = Isometry::from(aabb.center());
-            let significant = mesh.contains_point(isometry, &aabb.center())
-                || intersection_test(isometry, mesh, &sphere_pos, &sphere).unwrap();
-            return Svo::Leaf(Voxel::Boundry(significant));
-        }
-        let octants = aabb
-            .split_at_center()
-            .map(|octant| Svo::voxelize(isometry, mesh, &octant, height - 1));
-        Svo::Internal(Box::new(octants))
+        };
+        acc
+    });
+
+    let mut result = HashMap::new();
+    for point in significant_points {
+        let pos = aabb.mins + voxel_size * (point - origin).map(|v| v as f64);
+        let aabb = Aabb::from_half_extents(pos, Vector::repeat(voxel_size * 1.5));
+
+        let best = calculate_vertex_position(isometry, mesh, &aabb);
+        let offset = 84.0 * (best - pos) / voxel_size;
+        let coord = offset.map(|v| (126 + v.round() as i32).clamp(0, 252) as u8);
+        result.insert(point, Point::origin() + coord);
     }
-
-    fn extract_vertices(
-        &self,
-        isometry: &Isometry<f64>,
-        mesh: &TriMesh,
-        aabb: &Aabb,
-        origin: Point<i32>,
-        extent: i32,
-        processed: &mut HashSet<Point<i32>>,
-        grid: &mut VertexGrid,
-    ) {
-        match self {
-            Svo::Leaf(v) => match v {
-                Voxel::Inside => {
-                    grid.set_materials(
-                        &RangeZYX::with_extent(origin + Vector::repeat(1), extent),
-                        VertexMaterial::new(2),
-                    );
-                    // Unfortunately we need to set the position of the voxels here due to non-manifold meshes.
-                    // Otherwise the result will not be editable in game.
-                    //
-                    // This should just be the surface area, but this is easier and it doesn't really matter.
-                    for x in 0..extent + 1 {
-                        for y in 0..extent + 1 {
-                            for z in 0..extent + 1 {
-                                let point = &origin + Vector::new(x, y, z);
-                                if !processed.contains(&point) {
-                                    grid.set_voxel(&point, VertexVoxel::new([126, 126, 126]));
-                                }
-                            }
-                        }
-                    }
-                }
-                Voxel::Outside => (),
-                Voxel::Boundry(significant) => {
-                    assert_eq!(extent, 1);
-                    if *significant {
-                        grid.set_material(&(origin + Vector::repeat(1)), VertexMaterial::new(2));
-                    }
-                    let voxel_size = aabb.extents().x;
-                    for offset in &OFFSETS {
-                        let offset = Vector::from_row_slice(offset);
-                        let point = &origin + offset;
-                        if processed.contains(&point) {
-                            continue;
-                        }
-                        let pos = aabb.mins + voxel_size * offset.map(|v| v as f64);
-                        if mesh.contains_point(isometry, &pos) != *significant {
-                            processed.insert(point);
-
-                            let aabb =
-                                Aabb::from_half_extents(pos, Vector::repeat(voxel_size * 1.5));
-
-                            let best = calculate_vertex_position(isometry, mesh, &aabb);
-                            let offset = 84.0 * (best - pos) / voxel_size;
-                            let coord =
-                                offset.map(|v| (126 + v.round() as i32).clamp(0, 252) as u8);
-                            grid.set_voxel(&point, VertexVoxel::new([coord.x, coord.y, coord.z]));
-                        } else {
-                            grid.set_voxel(&point, VertexVoxel::new([126, 126, 126]));
-                        }
-                    }
-                }
-            },
-            Svo::Internal(children) => {
-                let octants = aabb.split_at_center();
-                for i in 0..8 {
-                    let offset = Vector::from_row_slice(&OFFSETS[i]);
-                    let half_extent = extent / 2;
-                    let origin = origin + offset * half_extent;
-                    Svo::extract_vertices(
-                        &children[i],
-                        isometry,
-                        mesh,
-                        &octants[i],
-                        origin,
-                        half_extent,
-                        processed,
-                        grid,
-                    )
-                }
-            }
-        }
-    }
+    result
 }
 
 // This is by far the most expensive part, mostly due to Trimesh being kinda slow and the algorithm itself
@@ -202,35 +153,70 @@ fn voxelize_chunk(
     mesh: &TriMesh,
     aabb: &Aabb,
     voxel_origin: &Point<i32>,
-    material : u64
+    material: u64,
 ) -> Option<VoxelCellData> {
-    // We have to over-voxelize that chunk due to weird boundries expected in voxel cell data.
+    // We have to over-voxelize that chunk due to the boundries expected in voxel cell data.
     // e.g. for an inner_range of [0, 0, 0] -> [32, 32, 32] the actual range of the chunk is
-    //  [-1, -1, -1] -> [34, 34, 34], likely to remove seems when generating the mesh.
+    //  [-1, -1, -1] -> [34, 34, 34], likely to remove seams when generating the mesh.
     let voxel_size = aabb.extents().x / 32.0;
     let voxel_size_offset = Vector::repeat(voxel_size);
     let origin = aabb.mins - voxel_size_offset * 2.0;
 
-    // Note that this large aabb results in a lot of wasted computation.
-    let svo_aabb = Aabb::new(origin, origin + voxel_size_offset * 64.0);
-    let svo = Svo::voxelize(isometry, mesh, &svo_aabb, 6);
-
     let range = RangeZYX::with_extent(voxel_origin - Vector::repeat(1), 35);
-    let inner_range = RangeZYX::with_extent(*voxel_origin, 32);
-    let mut grid = VertexGrid::new(range, inner_range);
-    let mut processed = HashSet::new();
-    svo.extract_vertices(
+
+    // Note that this large aabb could result in a lot of wasted computation, so we pass in the range above
+    // to restrict the expensive computation.
+    let svo_aabb = Aabb::new(origin, origin + voxel_size_offset * 64.0);
+    let voxels = voxelize(
         isometry,
         mesh,
         &svo_aabb,
-        range.origin - Vector::repeat(1),
+        voxel_origin - Vector::repeat(2),
         64,
-        &mut processed,
-        &mut grid,
+        &range,
+    );
+
+    let inner_range = RangeZYX::with_extent(*voxel_origin, 32);
+    let mut grid = voxels.fold(
+        VertexGrid::new(range, inner_range),
+        &|mut grid, subrange, value| {
+            let place_materials = match value {
+                Voxel::Internal => true,
+                Voxel::Boundry(significant) => *significant,
+            };
+            if place_materials {
+                // Materials are placed on the +[1, 1, 1] vertex.
+                let material_range = RangeZYX {
+                    origin: subrange.origin + Vector::repeat(1),
+                    size: subrange.size,
+                };
+                grid.set_materials(&material_range, VertexMaterial::new(2));
+            }
+
+            // Set the default positions for all voxels. We will update the significant ones later.
+            let voxel_range = RangeZYX {
+                origin: subrange.origin,
+                size: subrange.size + Vector::repeat(1),
+            };
+            grid.set_voxels(&voxel_range, VertexVoxel::new([126, 126, 126]));
+            grid
+        },
     );
 
     if grid.is_empty() {
         return None;
+    }
+
+    // Extract the non-default vertices and set them now.
+    let vertices = extract_vertices(
+        &voxels,
+        isometry,
+        mesh,
+        &svo_aabb,
+        voxel_origin - Vector::repeat(2),
+    );
+    for (point, offset) in vertices {
+        grid.set_voxel(&point, VertexVoxel::new([offset.x, offset.y, offset.z]));
     }
 
     let mut mapping = MaterialMapper::default();
@@ -268,10 +254,16 @@ impl LodNode {
         aabb: &Aabb,
         origin: Point<i32>,
         height: usize,
-        material : u64
+        material: u64,
     ) -> LodNode {
         if height == 0 {
-            return LodNode::Leaf(voxelize_chunk(isometry, mesh, aabb, &(origin * 32), material));
+            return LodNode::Leaf(voxelize_chunk(
+                isometry,
+                mesh,
+                aabb,
+                &(origin * 32),
+                material,
+            ));
         }
         let extent = 1 << height;
         let parent_origin = origin / extent as i32;
@@ -281,7 +273,7 @@ impl LodNode {
             || {
                 octants
                     .par_iter()
-                    .zip(&OFFSETS)
+                    .zip(&RangeZYX::OFFSETS)
                     .map(|(aabb, offset)| {
                         let offset = Vector::from_row_slice(offset);
                         let half_extent = extent / 2;
@@ -298,7 +290,7 @@ impl LodNode {
         &self,
         coords: Point<i32>,
         height: usize,
-        material : u64,
+        material: u64,
         result: &mut Vec<VoxelData>,
     ) -> AggregateMetadata {
         match self {
@@ -329,12 +321,13 @@ impl LodNode {
                 let voxels_b64 = BASE64_STANDARD.encode(voxels_compressed);
 
                 let extent = 1 << height;
-                let children =
-                    Vec::from_iter(children.iter().zip(&OFFSETS).map(|(child, offset)| {
+                let children = Vec::from_iter(children.iter().zip(&RangeZYX::OFFSETS).map(
+                    |(child, offset)| {
                         let half_extent = extent / 2;
                         let origin = coords + Vector::from_row_slice(offset) * half_extent;
                         child.make_voxel_data(origin, height - 1, material, result)
-                    }));
+                    },
+                ));
                 let meta = AggregateMetadata::combine(voxels_hash, &children);
                 let meta_compressed = meta.compress().unwrap();
                 let meta_hash = hash(&meta_compressed);
@@ -362,14 +355,20 @@ pub struct Lod {
 }
 
 impl Lod {
-    pub fn voxelize(isometry: &Isometry<f64>, mesh: &TriMesh, aabb: &Aabb, height: usize, material : u64) -> Lod {
+    pub fn voxelize(
+        isometry: &Isometry<f64>,
+        mesh: &TriMesh,
+        aabb: &Aabb,
+        height: usize,
+        material: u64,
+    ) -> Lod {
         Lod {
             root: LodNode::voxelize(isometry, mesh, &aabb, Point::origin(), height, material),
             height,
         }
     }
 
-    pub fn make_voxel_data(&self, material : u64) -> (Vec<VoxelData>, RangeZYX) {
+    pub fn make_voxel_data(&self, material: u64) -> (Vec<VoxelData>, RangeZYX) {
         let mut result = Vec::new();
         let meta = self
             .root
@@ -422,7 +421,7 @@ pub struct Blueprint {
     core_id: u64,
     bounds: Aabb,
     voxel_data: Vec<VoxelData>,
-    is_static : bool
+    is_static: bool,
 }
 
 impl Blueprint {
@@ -432,7 +431,7 @@ impl Blueprint {
         core_id: u64,
         bounds: Aabb,
         voxel_data: Vec<VoxelData>,
-        is_static : bool
+        is_static: bool,
     ) -> Blueprint {
         Blueprint {
             name,
