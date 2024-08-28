@@ -15,6 +15,7 @@ tobj = { version = "4.0.2", features=["merging"] }
 rayon = "1.10.0"
 ordered-float = "4.2.2"
 clap = { version = "4.5.16", features = ["derive"] }
+line_drawing = "1.0.0"
 
 [profile.release]
 debug = true

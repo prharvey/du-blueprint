@@ -1,14 +1,15 @@
 use core::f64;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 
 use base64::prelude::*;
 use chrono::prelude::*;
+use line_drawing::{VoxelOrigin, WalkVoxels};
 use ordered_float::NotNan;
 use parry3d_f64::bounding_volume::Aabb;
 use parry3d_f64::math::{Isometry, Point, Vector};
 use parry3d_f64::query::{intersection_test, PointQuery};
-use parry3d_f64::shape::{Ball, Cuboid, TriMesh};
+use parry3d_f64::shape::{Cuboid, Shape, TriMesh, Triangle};
 use rayon::prelude::*;
 use serde_json::json;
 
@@ -58,50 +59,101 @@ fn voxelize(
             }
         }
         if range.volume() == 1 {
-            // We do a quick check to see if the voxel is "significant", i.e. the center is in the mesh
-            // or the middle of the voxel intersects the mesh.
+            // We do a quick check to see if the voxel is "significant", i.e. the center is in the mesh.
             //
             // This helps remove artifacts from internal angles in the model.
-            let sphere = Ball::new(aabb.half_extents().x / 1.3);
-            let sphere_pos = Isometry::from(aabb.center());
-            let significant = mesh.contains_point(isometry, &aabb.center())
-                || intersection_test(isometry, mesh, &sphere_pos, &sphere).unwrap();
+            let significant = mesh.contains_point(isometry, &aabb.center());
             return SvoReturn::Leaf(Some(Voxel::Boundry(significant)));
         }
         SvoReturn::Continue
     })
 }
 
+fn discretize(point: Point<f64>, voxel_size: f64) -> Point<f64> {
+    (84.0 * point / voxel_size).map(|v| v.round())
+}
+
+// In game voxels operate on a discrete grid, so the best solutions are ones that
+// minimize error when going from the model surface to the in game voxel surface.
+fn lowest_error_point_on_surface(
+    starts: &[Point<f64>],
+    end: &Point<f64>,
+    shape: &impl Shape,
+) -> Point<f64> {
+    let mut lowest_error = f64::MAX;
+    let mut best = *end;
+
+    for start in starts {
+        if (end - start).magnitude_squared() < f64::EPSILON {
+            continue;
+        }
+        let dir = (end - start).normalize();
+        let start = end - 5.0 * dir;
+        let end = end + 5.0 * dir;
+        for (x, y, z) in WalkVoxels::<f64, i64>::new(
+            (start.x, start.y, start.z),
+            (end.x, end.y, end.z),
+            &VoxelOrigin::Corner,
+        ) {
+            let point = Point::new(x as f64, y as f64, z as f64);
+            let error = shape.distance_to_local_point(&point, false);
+            if error < lowest_error {
+                lowest_error = error;
+                best = point;
+            }
+        }
+    }
+    best
+}
+
+fn to_voxel_offset(offset: Vector<f64>) -> Vector<u8> {
+    offset.map(|v| (126.0 + v).clamp(0.0, 252.0) as u8)
+}
+
 // Tries to snap to the nearest vertex, then edge, then face.
 //
 // Results in some artifacts in game where too many voxels snap to a vertex/edge and as a result
 // you get some weird shadows on flat surfaces, but this otherwise preserves the model features.
-fn calculate_vertex_position(isometry: &Isometry<f64>, mesh: &TriMesh, aabb: &Aabb) -> Point<f64> {
-    let pos = aabb.center();
-
-    let (projection, feature) = mesh.project_point_and_get_feature(isometry, &pos);
+fn calculate_vertex_offset(
+    isometry: &Isometry<f64>,
+    mesh: &TriMesh,
+    aabb: &Aabb,
+    anchor: Point<f64>,
+    voxel_size: f64,
+) -> Vector<u8> {
+    let discrete_anchor = discretize(anchor, voxel_size);
+    let discrete_pos = discretize(aabb.center(), voxel_size);
+    let (_, feature) = mesh.project_point_and_get_feature(isometry, &anchor);
     let face = feature.unwrap_face();
-    let triangle = mesh.triangle(face);
+    let triangle = mesh.triangle(face).transformed(isometry);
+    let a = discretize(triangle.a, voxel_size);
+    let b = discretize(triangle.b, voxel_size);
+    let c = discretize(triangle.c, voxel_size);
+    let triangle = Triangle::new(a, b, c);
 
     let closest_vertex = triangle
         .vertices()
         .iter()
-        .map(|p| isometry * p)
-        .min_by_key(|v| NotNan::new((*v - pos).magnitude()).unwrap())
+        .min_by_key(|v| NotNan::new((*v - discrete_anchor).magnitude()).unwrap())
         .unwrap();
-    if aabb.contains_local_point(&closest_vertex) {
-        closest_vertex
+    let offset = closest_vertex - discrete_pos;
+    if offset.magnitude() < 84.0 {
+        to_voxel_offset(closest_vertex - discrete_pos)
     } else {
-        let closest_edge = triangle
+        let (segment, closest_edge) = triangle
             .edges()
-            .iter()
-            .map(|s| s.project_point(isometry, &pos, false).point)
-            .min_by_key(|v| NotNan::new((*v - pos).magnitude()).unwrap())
+            .map(|s| (s, s.project_local_point(&discrete_anchor, false).point))
+            .into_iter()
+            .min_by_key(|(_, v)| NotNan::new((*v - discrete_anchor).magnitude()).unwrap())
             .unwrap();
-        if aabb.contains_local_point(&closest_edge) {
-            closest_edge
+        let offset = closest_edge - discrete_pos;
+        if offset.magnitude() < 84.0 {
+            let best = lowest_error_point_on_surface(&[segment.a], &closest_edge, &segment);
+            to_voxel_offset(best - discrete_pos)
         } else {
-            projection.point
+            let point = triangle.project_local_point(&discrete_anchor, false).point;
+            let best = lowest_error_point_on_surface(&[a, b, c], &point, &triangle);
+            to_voxel_offset(best - discrete_pos)
         }
     }
 }
@@ -114,18 +166,21 @@ fn extract_vertices(
     origin: Point<i32>,
 ) -> HashMap<Point<i32>, Point<u8>> {
     let voxel_size = aabb.extents().x / voxels.range.size.x as f64;
-    let significant_points = voxels.fold(HashSet::new(), &|mut acc, range, v| {
+    let significant_points = voxels.fold(HashMap::new(), &|mut acc, range, v| {
         match v {
             Voxel::Internal => (),
             Voxel::Boundry(significant) => {
                 assert_eq!(range.volume(), 1);
+                let center =
+                    aabb.mins + voxel_size * (range.origin - origin).map(|v| v as f64 + 0.5);
                 for offset in &RangeZYX::OFFSETS {
                     let offset = Vector::from_row_slice(offset);
-                    let point = &range.origin + offset;
+                    let point = range.origin + offset;
 
                     let pos = aabb.mins + voxel_size * (point - origin).map(|v| v as f64);
                     if mesh.contains_point(isometry, &pos) != *significant {
-                        acc.insert(point);
+                        let entry = acc.entry(point).or_insert_with(|| Vec::new());
+                        entry.push(center.coords)
                     }
                 }
             }
@@ -134,14 +189,13 @@ fn extract_vertices(
     });
 
     let mut result = HashMap::new();
-    for point in significant_points {
+    for (point, anchors) in significant_points {
+        let anchor = anchors.iter().fold(Point::origin(), |a, v| a + v) / anchors.len() as f64;
         let pos = aabb.mins + voxel_size * (point - origin).map(|v| v as f64);
         let aabb = Aabb::from_half_extents(pos, Vector::repeat(voxel_size * 1.5));
 
-        let best = calculate_vertex_position(isometry, mesh, &aabb);
-        let offset = 84.0 * (best - pos) / voxel_size;
-        let coord = offset.map(|v| (126 + v.round() as i32).clamp(0, 252) as u8);
-        result.insert(point, Point::origin() + coord);
+        let best = calculate_vertex_offset(isometry, mesh, &aabb, anchor, voxel_size);
+        result.insert(point, Point::origin() + best);
     }
     result
 }
