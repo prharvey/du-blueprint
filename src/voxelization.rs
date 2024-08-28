@@ -84,7 +84,7 @@ fn lowest_error_point_on_surface(
     let mut best = *end;
 
     for start in starts {
-        if (end - start).magnitude_squared() < f64::EPSILON {
+        if (end - start).magnitude() < 0.1 {
             continue;
         }
         let dir = (end - start).normalize();
