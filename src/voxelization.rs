@@ -1,4 +1,3 @@
-use core::f64;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -125,10 +124,10 @@ fn calculate_vertex_offset(
     let discrete_pos = discretize(aabb.center(), voxel_size);
     let (_, feature) = mesh.project_point_and_get_feature(isometry, &anchor);
     let face = feature.unwrap_face();
-    let triangle = mesh.triangle(face).transformed(isometry);
-    let a = discretize(triangle.a, voxel_size);
-    let b = discretize(triangle.b, voxel_size);
-    let c = discretize(triangle.c, voxel_size);
+    let original_triangle = mesh.triangle(face).transformed(isometry);
+    let a = discretize(original_triangle.a, voxel_size);
+    let b = discretize(original_triangle.b, voxel_size);
+    let c = discretize(original_triangle.c, voxel_size);
     let triangle = Triangle::new(a, b, c);
 
     let closest_vertex = triangle
@@ -151,9 +150,17 @@ fn calculate_vertex_offset(
             let best = lowest_error_point_on_surface(&[segment.a], &closest_edge, &segment);
             to_voxel_offset(best - discrete_pos)
         } else {
-            let point = triangle.project_local_point(&discrete_anchor, false).point;
-            let best = lowest_error_point_on_surface(&[a, b, c], &point, &triangle);
-            to_voxel_offset(best - discrete_pos)
+            // Detect a degenerate triangle.
+            if triangle.area() <= 1e-6 {
+                let fallback = original_triangle
+                    .project_local_point(&discrete_anchor, false)
+                    .point;
+                to_voxel_offset(fallback - discrete_pos)
+            } else {
+                let point = triangle.project_local_point(&discrete_anchor, false).point;
+                let best = lowest_error_point_on_surface(&[a, b, c], &point, &triangle);
+                to_voxel_offset(best - discrete_pos)
+            }
         }
     }
 }
