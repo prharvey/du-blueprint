@@ -7,7 +7,8 @@ edition = "2021"
 lz4 = "1.23.1"
 base64 = "0.22.1"
 xxhash-rust = { version="0.8.12", features=["xxh64"] }
-parry3d-f64 = "0.17.0"
+# Temporary while changes are getting PR'd.
+parry3d-f64 = { git = "https://github.com/prharvey/parry.git", branch = "opt" }
 rangemap = "1.5.1"
 serde_json = "1.0"
 chrono = "0.4.38"

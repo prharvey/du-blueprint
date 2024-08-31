@@ -518,8 +518,7 @@ dependencies = [
 [[package]]
 name = "parry3d-f64"
 version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e94dbc90605147f88e380c4745837bf782adc2d352714aa787623fb7e623a9f8"
+source = "git+https://github.com/prharvey/parry.git?branch=opt#7b097b1d935183903033c381e592b2064f115f9e"
 dependencies = [
  "approx",
  "arrayvec",
