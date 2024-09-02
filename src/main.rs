@@ -35,6 +35,10 @@ impl CoreType {
                 CoreSize::M => 1418170469,
                 CoreSize::L => 1417952990,
                 CoreSize::XL => 1417997710,
+                CoreSize::XXL => 2177071767,
+                CoreSize::XXXL => 2162422445,
+                CoreSize::XXXXL => 2148856665,
+                CoreSize::XXXXXL => 2162446983,
             },
             CoreType::Static => match size {
                 CoreSize::XS => 2738359963,
@@ -42,25 +46,33 @@ impl CoreType {
                 CoreSize::M => 909184430,
                 CoreSize::L => 910155097,
                 CoreSize::XL => 909203438,
+                CoreSize::XXL => 238752214,
+                CoreSize::XXXL => 238876751,
+                CoreSize::XXXXL => 237299411,
+                CoreSize::XXXXXL => 30685981,
             },
             CoreType::Space => match size {
                 CoreSize::XS => 3624942103,
                 CoreSize::S => 3624940909,
                 CoreSize::M => 5904195,
                 CoreSize::L => 5904544,
-                CoreSize::XL => panic!("Space cores do not come in XL."),
+                _ => panic!("Space cores do not come in {:?}.", size),
             },
         }
     }
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum CoreSize {
     XS,
     S,
     M,
     L,
     XL,
+    XXL,
+    XXXL,
+    XXXXL,
+    XXXXXL,
 }
 
 struct CoreInfo {
@@ -97,6 +109,26 @@ impl CoreInfo {
                 element_id: id,
                 size: 512,
                 height: 9,
+            },
+            CoreSize::XXL => CoreInfo {
+                element_id: id,
+                size: 1024,
+                height: 10,
+            },
+            CoreSize::XXXL => CoreInfo {
+                element_id: id,
+                size: 2048,
+                height: 11,
+            },
+            CoreSize::XXXXL => CoreInfo {
+                element_id: id,
+                size: 4096,
+                height: 12,
+            },
+            CoreSize::XXXXXL => CoreInfo {
+                element_id: id,
+                size: 8192,
+                height: 13,
             },
         }
     }
