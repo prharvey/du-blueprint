@@ -651,10 +651,6 @@ impl VertexGrid {
         self.sparse_materials.is_empty()
     }
 
-    pub fn set_material(&mut self, point: &Point<i32>, material: VertexMaterial) {
-        self.set_materials(&RangeZYX::single(*point), material)
-    }
-
     pub fn set_materials(&mut self, subrange: &RangeZYX, material: VertexMaterial) {
         self.range
             .for_each_index_range(subrange, |r| self.sparse_materials.insert(r, material))

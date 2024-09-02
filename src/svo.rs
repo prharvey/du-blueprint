@@ -1,6 +1,4 @@
-use std::array;
 use std::fmt::Debug;
-use std::hint::unreachable_unchecked;
 
 use parry3d_f64::math::Point;
 
@@ -46,37 +44,6 @@ where
         }
     }
 
-    fn insert_volume(&mut self, range: &RangeZYX, volume: &RangeZYX, value: Option<T>) -> bool {
-        let intersection = volume.intersection(range);
-        match intersection.volume() {
-            0 => false,
-            v if v == range.volume() => {
-                *self = SvoNode::Leaf(value);
-                true
-            }
-            _ => {
-                if let SvoNode::Leaf(_) = self {
-                    *self = SvoNode::Internal(Box::new(array::from_fn(|_| self.clone())))
-                }
-                match self {
-                    SvoNode::Leaf(_) => unsafe { unreachable_unchecked() },
-                    SvoNode::Internal(children) => {
-                        let mut any_set = false;
-                        for child in children.iter_mut() {
-                            any_set |= child.insert_volume(range, volume, value.clone());
-                        }
-                        if any_set && children.windows(2).all(|w| w[0] == w[1]) {
-                            *self = children[0].clone();
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fn fold_volume<Acc, F>(&self, range: &RangeZYX, volume: &RangeZYX, acc: Acc, func: &F) -> Acc
     where
         F: Fn(Acc, &RangeZYX, &T) -> Acc,
@@ -109,14 +76,6 @@ impl<T> Svo<T>
 where
     T: Clone + PartialEq,
 {
-    pub fn new(origin: Point<i32>, extent: usize) -> Self {
-        assert!(extent.is_power_of_two());
-        Self {
-            root: SvoNode::Leaf(None),
-            range: RangeZYX::with_extent(origin, extent as i32),
-        }
-    }
-
     pub fn from_fn<F>(origin: Point<i32>, extent: usize, func: &F) -> Self
     where
         F: Fn(&RangeZYX) -> SvoReturn<T>,
@@ -127,22 +86,6 @@ where
             root: SvoNode::from_fn(&range, func),
             range,
         }
-    }
-
-    pub fn insert(&mut self, point: &Point<i32>, value: T) {
-        self.insert_volume(&RangeZYX::single(*point), value);
-    }
-
-    pub fn insert_volume(&mut self, volume: &RangeZYX, value: T) {
-        self.root.insert_volume(&self.range, volume, Some(value));
-    }
-
-    pub fn clear(&mut self, point: &Point<i32>) {
-        self.clear_volume(&RangeZYX::single(*point));
-    }
-
-    pub fn clear_volume(&mut self, volume: &RangeZYX) {
-        self.root.insert_volume(&self.range, volume, None);
     }
 
     pub fn fold<Acc, F>(&self, acc: Acc, func: &F) -> Acc
