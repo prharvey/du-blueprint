@@ -2,6 +2,10 @@
 
 A tool for generating Dual Universe blueprint files from models.
 
+Warning: The larger core sizes (above XXL) require a pretty beefy machine to generate. An XXXL
+version of 'suzanne` (the Blender monkey) peaks at ~16GB memory usage and generates a 750MB
+blueprint file. Expect an 8x bigger number for each size above that.
+
 Quick start:
 ```
 du-blueprint generate --auto --type=dynamic --size=l my_model.obj my_blueprint.blueprint
