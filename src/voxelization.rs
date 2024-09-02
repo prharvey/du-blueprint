@@ -225,8 +225,7 @@ fn voxelize_chunk(
 
     let range = RangeZYX::with_extent(voxel_origin - Vector::repeat(1), 35);
 
-    // Note that this large aabb could result in a lot of wasted computation, so we pass in the range above
-    // to restrict the expensive computation.
+    // Note that this large aabb could result in a lot of wasted computation, so we clip the range.
     let svo_aabb = Aabb::new(origin, origin + voxel_size_offset * 64.0);
     let voxels = voxelize(
         isometry,
