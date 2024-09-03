@@ -9,10 +9,12 @@ use parry3d_f64::shape::{TriMesh, TriMeshFlags};
 use squarion::{AggregateMetadata, Deserialize, VoxelCellData};
 use tobj::LoadOptions;
 
+mod blueprint;
 mod squarion;
 mod svo;
 mod voxelization;
 
+use crate::blueprint::*;
 use crate::voxelization::*;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -252,10 +254,8 @@ fn main() {
                 Aabb::from_half_extents(aabb.center(), extents / scale.scale)
             };
 
-            let svo = Lod::voxelize(&isometry, &mesh, &svo_aabb, height, material);
-            let (voxel_data, bb) = svo.make_voxel_data(material);
-            let mins = bb.origin.map(|v| v as f64) / 4.0;
-            let aabb = Aabb::new(mins, mins + bb.size.map(|v| v as f64) / 4.0);
+            let voxelizer = Voxelizer::new(isometry, mesh);
+            let svo = voxelizer.create_lods(&svo_aabb, Point::origin(), height, material);
             let bp = Blueprint::new(
                 input
                     .clone()
@@ -266,8 +266,8 @@ fn main() {
                     .to_string(),
                 core_info.size,
                 core_info.element_id,
-                aabb,
-                voxel_data,
+                material,
+                svo,
                 r#type != CoreType::Dynamic,
             );
             File::create(output)

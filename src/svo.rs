@@ -1,36 +1,21 @@
-use std::fmt::Debug;
+use std::{array, fmt::Debug};
 
 use parry3d_f64::math::Point;
 
 use crate::squarion::*;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum SvoNode<T> {
-    Leaf(Option<T>),
-    Internal(Box<[SvoNode<T>; 8]>),
-}
-
-impl<T> PartialEq for SvoNode<T>
-where
-    T: PartialEq,
-{
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Leaf(l0), Self::Leaf(r0)) => l0 == r0,
-            _ => false,
-        }
-    }
+    Leaf(T),
+    Internal(T, Box<[SvoNode<T>; 8]>),
 }
 
 pub enum SvoReturn<T> {
-    Leaf(Option<T>),
-    Continue,
+    Leaf(T),
+    Internal(T),
 }
 
-impl<T> SvoNode<T>
-where
-    T: Clone + PartialEq,
-{
+impl<T> SvoNode<T> {
     fn from_fn<F>(range: &RangeZYX, func: &F) -> Self
     where
         F: Fn(&RangeZYX) -> SvoReturn<T>,
@@ -38,31 +23,44 @@ where
         assert!(range.size.min() != 0);
         match func(range) {
             SvoReturn::Leaf(v) => SvoNode::Leaf(v),
-            SvoReturn::Continue => SvoNode::Internal(Box::new(
-                range.split_at_center().map(|o| Self::from_fn(&o, func)),
-            )),
+            SvoReturn::Internal(v) => SvoNode::Internal(
+                v,
+                Box::new(range.split_at_center().map(|o| Self::from_fn(&o, func))),
+            ),
         }
     }
 
-    fn fold_volume<Acc, F>(&self, range: &RangeZYX, volume: &RangeZYX, acc: Acc, func: &F) -> Acc
+    fn cata<F, R>(&self, range: &RangeZYX, func: &mut F) -> R
     where
-        F: Fn(Acc, &RangeZYX, &T) -> Acc,
+        F: FnMut(&RangeZYX, &T, Option<[R; 8]>) -> R,
     {
-        let intersection = volume.intersection(range);
-        match intersection.volume() {
-            0 => acc,
-            _ => match self {
-                SvoNode::Leaf(v) => match v {
-                    Some(v) => func(acc, &intersection, v),
-                    None => acc,
-                },
-                SvoNode::Internal(children) => children
-                    .iter()
-                    .zip(range.split_at_center())
-                    .fold(acc, |acc, (node, subrange)| {
-                        node.fold_volume(&subrange, volume, acc, func)
-                    }),
-            },
+        match self {
+            SvoNode::Leaf(v) => func(range, v, None),
+            SvoNode::Internal(v, children) => {
+                let octants = range.split_at_center();
+                let results = array::from_fn(|i| children[i].cata(&octants[i], func));
+                func(range, v, Some(results))
+            }
+        }
+    }
+
+    fn into_cata<F, R>(self, range: &RangeZYX, func: &mut F) -> R
+    where
+        F: FnMut(&RangeZYX, T, Option<[R; 8]>) -> R,
+    {
+        match self {
+            SvoNode::Leaf(v) => func(range, v, None),
+            SvoNode::Internal(v, children) => {
+                let octants = range.split_at_center();
+                // This is the only good way to move out of an array. It's kinda dumb.
+                let mut i = 0;
+                let results = children.map(|c| {
+                    let result = c.into_cata(&octants[i], func);
+                    i += 1;
+                    result
+                });
+                func(range, v, Some(results))
+            }
         }
     }
 }
@@ -72,10 +70,7 @@ pub struct Svo<T> {
     pub range: RangeZYX,
 }
 
-impl<T> Svo<T>
-where
-    T: Clone + PartialEq,
-{
+impl<T> Svo<T> {
     pub fn from_fn<F>(origin: Point<i32>, extent: usize, func: &F) -> Self
     where
         F: Fn(&RangeZYX) -> SvoReturn<T>,
@@ -88,17 +83,23 @@ where
         }
     }
 
-    pub fn fold<Acc, F>(&self, acc: Acc, func: &F) -> Acc
+    pub fn cata<F, R>(&self, mut func: F) -> R
     where
-        F: Fn(Acc, &RangeZYX, &T) -> Acc,
+        F: FnMut(&RangeZYX, &T, Option<[R; 8]>) -> R,
     {
-        self.fold_volume(&self.range, acc, func)
+        self.root.cata(&self.range, &mut func)
     }
 
-    pub fn fold_volume<Acc, F>(&self, volume: &RangeZYX, acc: Acc, func: &F) -> Acc
+    pub fn into_map<F, R>(self, mut func: F) -> Svo<R>
     where
-        F: Fn(Acc, &RangeZYX, &T) -> Acc,
+        F: FnMut(T) -> R,
     {
-        self.root.fold_volume(&self.range, volume, acc, func)
+        Svo {
+            root: self.root.into_cata(&self.range, &mut |_, v, cs| match cs {
+                Some(cs) => SvoNode::Internal(func(v), Box::new(cs)),
+                None => SvoNode::Leaf(func(v)),
+            }),
+            range: self.range,
+        }
     }
 }

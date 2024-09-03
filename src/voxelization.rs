@@ -1,16 +1,14 @@
+use async_std::task::{self, block_on};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 
-use base64::prelude::*;
-use chrono::prelude::*;
 use line_drawing::{VoxelOrigin, WalkVoxels};
 use ordered_float::NotNan;
 use parry3d_f64::bounding_volume::Aabb;
 use parry3d_f64::math::{Isometry, Point, Vector};
 use parry3d_f64::query::{intersection_test, PointQuery};
 use parry3d_f64::shape::{Cuboid, Shape, TriMesh, Triangle};
-use rayon::prelude::*;
-use serde_json::json;
 
 use crate::squarion::*;
 use crate::svo::*;
@@ -18,6 +16,7 @@ use crate::svo::*;
 #[derive(Debug, Clone, PartialEq)]
 enum Voxel {
     Internal,
+    External,
     Boundry(bool),
 }
 
@@ -32,7 +31,7 @@ fn voxelize(
     let voxel_size = aabb.extents().x / extent as f64;
     Svo::from_fn(origin, extent, &|range| {
         if range.intersection(clip_range).volume() == 0 {
-            return SvoReturn::Leaf(None);
+            return SvoReturn::Leaf(Voxel::External);
         }
 
         let mins = aabb.mins + (range.origin - origin).map(|v| v as f64) * voxel_size;
@@ -52,19 +51,19 @@ fn voxelize(
             // Bias towards assuming outside, since it's better to have empty internals than random
             // floating cubes.
             if inside_count >= 7 {
-                return SvoReturn::Leaf(Some(Voxel::Internal));
+                SvoReturn::Leaf(Voxel::Internal)
             } else {
-                return SvoReturn::Leaf(None);
+                SvoReturn::Leaf(Voxel::External)
             }
-        }
-        if range.volume() == 1 {
+        } else if range.volume() == 1 {
             // We do a quick check to see if the voxel is "significant", i.e. the center is in the mesh.
             //
             // This helps remove artifacts from internal angles in the model.
             let significant = mesh.contains_point(isometry, &aabb.center());
-            return SvoReturn::Leaf(Some(Voxel::Boundry(significant)));
+            SvoReturn::Leaf(Voxel::Boundry(significant))
+        } else {
+            SvoReturn::Internal(Voxel::Boundry(false))
         }
-        SvoReturn::Continue
     })
 }
 
@@ -173,9 +172,12 @@ fn extract_vertices(
     origin: Point<i32>,
 ) -> HashMap<Point<i32>, Point<u8>> {
     let voxel_size = aabb.extents().x / voxels.range.size.x as f64;
-    let significant_points = voxels.fold(HashMap::new(), &|mut acc, range, v| {
+    let mut significant_points = HashMap::new();
+    voxels.cata(|range, v, cs| {
+        if cs.is_some() {
+            return;
+        }
         match v {
-            Voxel::Internal => (),
             Voxel::Boundry(significant) => {
                 assert_eq!(range.volume(), 1);
                 let center =
@@ -186,13 +188,15 @@ fn extract_vertices(
 
                     let pos = aabb.mins + voxel_size * (point - origin).map(|v| v as f64);
                     if mesh.contains_point(isometry, &pos) != *significant {
-                        let entry = acc.entry(point).or_insert_with(|| Vec::new());
+                        let entry = significant_points
+                            .entry(point)
+                            .or_insert_with(|| Vec::new());
                         entry.push(center.coords)
                     }
                 }
             }
+            _ => (),
         };
-        acc
     });
 
     let mut result = HashMap::new();
@@ -237,31 +241,33 @@ fn voxelize_chunk(
     );
 
     let inner_range = RangeZYX::with_extent(*voxel_origin, 32);
-    let mut grid = voxels.fold(
-        VertexGrid::new(range, inner_range),
-        &|mut grid, subrange, value| {
-            let place_materials = match value {
-                Voxel::Internal => true,
-                Voxel::Boundry(significant) => *significant,
+    let mut grid = VertexGrid::new(range, inner_range);
+    voxels.cata(|subrange, value, cs| {
+        if cs.is_some() {
+            return;
+        }
+        let (place_materials, place_positions) = match value {
+            Voxel::External => (false, false),
+            Voxel::Internal => (true, true),
+            Voxel::Boundry(significant) => (*significant, true),
+        };
+        if place_materials {
+            // Materials are placed on the +[1, 1, 1] vertex.
+            let material_range = RangeZYX {
+                origin: subrange.origin + Vector::repeat(1),
+                size: subrange.size,
             };
-            if place_materials {
-                // Materials are placed on the +[1, 1, 1] vertex.
-                let material_range = RangeZYX {
-                    origin: subrange.origin + Vector::repeat(1),
-                    size: subrange.size,
-                };
-                grid.set_materials(&material_range, VertexMaterial::new(2));
-            }
-
+            grid.set_materials(&material_range, VertexMaterial::new(2));
+        }
+        if place_positions {
             // Set the default positions for all voxels. We will update the significant ones later.
             let voxel_range = RangeZYX {
                 origin: subrange.origin,
                 size: subrange.size + Vector::repeat(1),
             };
             grid.set_voxels(&voxel_range, VertexVoxel::new([126, 126, 126]));
-            grid
-        },
-    );
+        }
+    });
 
     if grid.is_empty() {
         return None;
@@ -301,267 +307,53 @@ fn voxelize_chunk(
     Some(VoxelCellData::new(grid, mapping))
 }
 
-#[derive(Debug)]
-enum LodNode {
-    Leaf(Option<VoxelCellData>),
-    Internal(Option<VoxelCellData>, Box<[LodNode; 8]>),
+pub struct Voxelizer {
+    isometry: Arc<Isometry<f64>>,
+    mesh: Arc<TriMesh>,
 }
 
-impl LodNode {
-    fn voxelize(
-        isometry: &Isometry<f64>,
-        mesh: &TriMesh,
+impl Voxelizer {
+    pub fn new(isometry: Isometry<f64>, mesh: TriMesh) -> Voxelizer {
+        Voxelizer {
+            isometry: Arc::new(isometry),
+            mesh: Arc::new(mesh),
+        }
+    }
+
+    pub fn create_lods(
+        &self,
         aabb: &Aabb,
         origin: Point<i32>,
         height: usize,
         material: u64,
-    ) -> LodNode {
-        if height == 0 {
-            return LodNode::Leaf(voxelize_chunk(
-                isometry,
-                mesh,
-                aabb,
-                &(origin * 32),
-                material,
-            ));
-        }
+    ) -> Svo<Option<VoxelCellData>> {
         let extent = 1 << height;
-        let parent_origin = origin / extent as i32;
-        let octants = aabb.split_at_center();
-        let (me, children) = rayon::join(
-            || voxelize_chunk(isometry, mesh, aabb, &(parent_origin * 32), material),
-            || {
-                octants
-                    .par_iter()
-                    .zip(&RangeZYX::OFFSETS)
-                    .map(|(aabb, offset)| {
-                        let offset = Vector::from_row_slice(offset);
-                        let half_extent = extent / 2;
-                        let origin = origin + offset * half_extent as i32;
-                        LodNode::voxelize(isometry, mesh, &aabb, origin, height - 1, material)
-                    })
-                    .collect::<Vec<_>>()
-            },
-        );
-        LodNode::Internal(me, Box::new(children.try_into().unwrap()))
-    }
+        let chunk_size = aabb.extents().x / extent as f64;
+        let chunk_futures = Svo::from_fn(origin, extent, &|range| {
+            let mins = aabb.mins + (range.origin - origin).map(|v| v as f64) * chunk_size;
+            let maxs = mins + range.size.map(|v| v as f64) * chunk_size;
+            let aabb = Aabb::new(mins.into(), maxs.into());
 
-    fn make_voxel_data(
-        &self,
-        coords: Point<i32>,
-        height: usize,
-        material: u64,
-        result: &mut Vec<VoxelData>,
-    ) -> AggregateMetadata {
-        match self {
-            LodNode::Leaf(Some(voxels)) => {
-                let voxels_compressed = voxels.compress().unwrap();
-                let voxels_hash = hash(&voxels_compressed);
-                let voxels_b64 = BASE64_STANDARD.encode(voxels_compressed);
-
-                let meta = voxels.calculate_metadata(voxels_hash, material);
-                let meta_compressed = meta.compress().unwrap();
-                let meta_hash = hash(&meta_compressed);
-                let meta_b64 = BASE64_STANDARD.encode(meta_compressed);
-
-                let data = VoxelData {
-                    height,
-                    coords,
-                    meta_data: meta_b64,
-                    meta_hash,
-                    voxel_data: voxels_b64,
-                    voxel_hash: voxels_hash,
-                };
-                result.push(data);
-                meta
+            let cuboid = Cuboid::new(aabb.half_extents() * 1.05);
+            let cuboid_pos = Isometry::from(aabb.center());
+            if intersection_test(&self.isometry, self.mesh.as_ref(), &cuboid_pos, &cuboid).unwrap()
+            {
+                let voxel_origin = range.origin * 32;
+                let isometry = self.isometry.clone();
+                let mesh = self.mesh.clone();
+                let task = task::spawn(async move {
+                    voxelize_chunk(&isometry, &mesh, &aabb, &voxel_origin, material)
+                });
+                if range.size.x == 1 {
+                    SvoReturn::Leaf(Some(task))
+                } else {
+                    SvoReturn::Internal(Some(task))
+                }
+            } else {
+                SvoReturn::Leaf(None)
             }
-            LodNode::Internal(Some(voxels), children) => {
-                let voxels_compressed = voxels.compress().unwrap();
-                let voxels_hash = hash(&voxels_compressed);
-                let voxels_b64 = BASE64_STANDARD.encode(voxels_compressed);
+        });
 
-                let extent = 1 << height;
-                let children = Vec::from_iter(children.iter().zip(&RangeZYX::OFFSETS).map(
-                    |(child, offset)| {
-                        let half_extent = extent / 2;
-                        let origin = coords + Vector::from_row_slice(offset) * half_extent;
-                        child.make_voxel_data(origin, height - 1, material, result)
-                    },
-                ));
-                let meta = AggregateMetadata::combine(voxels_hash, &children);
-                let meta_compressed = meta.compress().unwrap();
-                let meta_hash = hash(&meta_compressed);
-                let meta_b64 = BASE64_STANDARD.encode(meta_compressed);
-
-                let data = VoxelData {
-                    height: height,
-                    coords: coords / extent,
-                    meta_data: meta_b64,
-                    meta_hash,
-                    voxel_data: voxels_b64,
-                    voxel_hash: voxels_hash,
-                };
-                result.push(data);
-                meta
-            }
-            _ => AggregateMetadata::default(),
-        }
-    }
-}
-
-pub struct Lod {
-    root: LodNode,
-    height: usize,
-}
-
-impl Lod {
-    pub fn voxelize(
-        isometry: &Isometry<f64>,
-        mesh: &TriMesh,
-        aabb: &Aabb,
-        height: usize,
-        material: u64,
-    ) -> Lod {
-        Lod {
-            root: LodNode::voxelize(isometry, mesh, &aabb, Point::origin(), height, material),
-            height,
-        }
-    }
-
-    pub fn make_voxel_data(&self, material: u64) -> (Vec<VoxelData>, RangeZYX) {
-        let mut result = Vec::new();
-        let meta = self
-            .root
-            .make_voxel_data(Point::origin(), self.height, material, &mut result);
-        (result, meta.heavy_current.bounding_box.unwrap())
-    }
-}
-
-pub struct VoxelData {
-    pub height: usize,
-    pub coords: Point<i32>,
-    pub meta_data: String,
-    pub meta_hash: i64,
-    pub voxel_data: String,
-    pub voxel_hash: i64,
-}
-
-impl VoxelData {
-    pub fn to_construct_json(&self) -> serde_json::Value {
-        json!({
-          "created_at": { "$date": Utc::now().to_rfc3339() },
-          "h": self.height + 3,
-          "k": 0,
-          "metadata": { "mversion": 0, "pversion": 4, "uptodate": true, "version": 8 },
-          "oid": { "$numberLong": 1 },
-          "records": {
-            "meta": {
-              "data": { "$binary": self.meta_data, "$type": "0x0" },
-              "hash": { "$numberLong": self.meta_hash },
-              "updated_at": { "$date": Utc::now().to_rfc3339() }
-            },
-            "voxel": {
-              "data": { "$binary": self.voxel_data, "$type": "0x0" },
-              "hash": { "$numberLong": self.voxel_hash },
-              "updated_at": { "$date": Utc::now().to_rfc3339() }
-            }
-          },
-          "updated_at": { "$date": Utc::now().to_rfc3339() },
-          "version": { "$numberLong": 1 },
-          "x": { "$numberLong": self.coords.x },
-          "y": { "$numberLong": self.coords.y },
-          "z": { "$numberLong": self.coords.z }
-        })
-    }
-}
-
-pub struct Blueprint {
-    name: String,
-    size: usize,
-    core_id: u64,
-    bounds: Aabb,
-    voxel_data: Vec<VoxelData>,
-    is_static: bool,
-}
-
-impl Blueprint {
-    pub fn new(
-        name: String,
-        size: usize,
-        core_id: u64,
-        bounds: Aabb,
-        voxel_data: Vec<VoxelData>,
-        is_static: bool,
-    ) -> Blueprint {
-        Blueprint {
-            name,
-            size,
-            core_id,
-            bounds,
-            voxel_data,
-            is_static,
-        }
-    }
-
-    pub fn to_construct_json(&self) -> serde_json::Value {
-        let center = Vector::repeat(self.size as f32 / 2.0 + 0.125);
-        json!({
-            "Model": {
-                "Id": 1,
-                "Name": self.name,
-                "Size": self.size,
-                "CreatedAt": Utc::now().to_rfc3339(),
-                "CreatorId": 2,
-                "JsonProperties": {
-                    "kind": 4,
-                    "size": self.size,
-                    "serverProperties": {
-                        "creatorId": { "playerId": 2, "organizationId": 0 },
-                        "originConstructId": 1,
-                        "blueprintId": null,
-                        "isFixture": null,
-                        "isBase": null,
-                        "isFlaggedForModeration": null,
-                        "isDynamicWreck": false,
-                        "fuelType": null,
-                        "fuelAmount": null,
-                        "rdmsTags": { "constructTags": [  ], "elementsTags": [  ] },
-                        "compacted": false,
-                        "dynamicFixture": null,
-                        "constructCloneSource": null
-                    },
-                    "header": null,
-                    "voxelGeometry": { "size": self.size, "kind": 1, "voxelLod0": 3, "radius": null, "minRadius": null, "maxRadius": null },
-                    "planetProperties": null,
-                    "isNPC": false,
-                    "isUntargetable": false
-                },
-                "Static": self.is_static,
-                "Bounds": {
-                    "min": { "x": self.bounds.mins.x, "y": self.bounds.mins.y, "z": self.bounds.mins.z },
-                    "max": { "x": self.bounds.maxs.x, "y": self.bounds.maxs.y, "z": self.bounds.maxs.z }
-                },
-                "FreeDeploy": false,
-                "MaxUse": null,
-                "HasMaterials": false,
-                "DataId": null
-            },
-            "VoxelData": serde_json::Value::Array(self.voxel_data.iter().map(VoxelData::to_construct_json).collect()),
-            "Elements": [
-              {
-                "elementId": 1,
-                "localId": 1,
-                "constructId": 0,
-                "playerId": 0,
-                "elementType": self.core_id,
-                "position": { "x": center.x, "y": center.y, "z": center.z },
-                "rotation": { "x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0 },
-                "properties": [ [ "drmProtected", { "type": 1, "value": false } ] ],
-                "serverProperties": {  },
-                "links": [  ]
-              }
-            ],
-            "Links": [  ]
-        })
+        chunk_futures.into_map(|f| f.map(|f| block_on(f)).flatten())
     }
 }
