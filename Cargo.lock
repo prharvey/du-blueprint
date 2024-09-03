@@ -407,7 +407,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "du-blueprint"
-version = "0.1.6"
+version = "0.2.0"
 dependencies = [
  "async-std",
  "base64",
