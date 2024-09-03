@@ -17,122 +17,7 @@ mod voxelization;
 use crate::blueprint::*;
 use crate::voxelization::*;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
-
-#[derive(Clone, Copy, PartialEq, ValueEnum)]
-enum CoreType {
-    Dynamic,
-    Static,
-    Space,
-}
-
-impl CoreType {
-    fn element_id(&self, size: CoreSize) -> u64 {
-        match self {
-            CoreType::Dynamic => match size {
-                CoreSize::XS => 183890713,
-                CoreSize::S => 183890525,
-                CoreSize::M => 1418170469,
-                CoreSize::L => 1417952990,
-                CoreSize::XL => 1417997710,
-                CoreSize::XXL => 2177071767,
-                CoreSize::XXXL => 2162422445,
-                CoreSize::XXXXL => 2148856665,
-                CoreSize::XXXXXL => 2162446983,
-            },
-            CoreType::Static => match size {
-                CoreSize::XS => 2738359963,
-                CoreSize::S => 2738359893,
-                CoreSize::M => 909184430,
-                CoreSize::L => 910155097,
-                CoreSize::XL => 909203438,
-                CoreSize::XXL => 238752214,
-                CoreSize::XXXL => 238876751,
-                CoreSize::XXXXL => 237299411,
-                CoreSize::XXXXXL => 30685981,
-            },
-            CoreType::Space => match size {
-                CoreSize::XS => 3624942103,
-                CoreSize::S => 3624940909,
-                CoreSize::M => 5904195,
-                CoreSize::L => 5904544,
-                _ => panic!("Space cores do not come in {:?}.", size),
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum CoreSize {
-    XS,
-    S,
-    M,
-    L,
-    XL,
-    XXL,
-    XXXL,
-    XXXXL,
-    XXXXXL,
-}
-
-struct CoreInfo {
-    element_id: u64,
-    size: usize,
-    height: usize,
-}
-
-impl CoreInfo {
-    fn from(size: CoreSize, core_type: CoreType) -> CoreInfo {
-        let id = core_type.element_id(size);
-        match size {
-            CoreSize::XS => CoreInfo {
-                element_id: id,
-                size: 32,
-                height: 5,
-            },
-            CoreSize::S => CoreInfo {
-                element_id: id,
-                size: 64,
-                height: 6,
-            },
-            CoreSize::M => CoreInfo {
-                element_id: id,
-                size: 128,
-                height: 7,
-            },
-            CoreSize::L => CoreInfo {
-                element_id: id,
-                size: 256,
-                height: 8,
-            },
-            CoreSize::XL => CoreInfo {
-                element_id: id,
-                size: 512,
-                height: 9,
-            },
-            CoreSize::XXL => CoreInfo {
-                element_id: id,
-                size: 1024,
-                height: 10,
-            },
-            CoreSize::XXXL => CoreInfo {
-                element_id: id,
-                size: 2048,
-                height: 11,
-            },
-            CoreSize::XXXXL => CoreInfo {
-                element_id: id,
-                size: 4096,
-                height: 12,
-            },
-            CoreSize::XXXXXL => CoreInfo {
-                element_id: id,
-                size: 8192,
-                height: 13,
-            },
-        }
-    }
-}
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -238,12 +123,10 @@ fn main() {
             )
             .unwrap();
 
-            let core_info = CoreInfo::from(size, r#type);
-
             // TODO: allow translations and rotations
             let isometry = Isometry::default();
 
-            let height = core_info.height - 3;
+            let height = size.height() - 3;
             let aabb = mesh.aabb(&isometry);
             let svo_aabb = if scale.auto {
                 let scale = Vector::repeat(aabb.extents().max()).component_div(&aabb.extents());
@@ -264,11 +147,9 @@ fn main() {
                     .to_str()
                     .unwrap()
                     .to_string(),
-                core_info.size,
-                core_info.element_id,
+                CoreInfo::from(size, r#type),
                 material,
                 svo,
-                r#type != CoreType::Dynamic,
             );
             File::create(output)
                 .unwrap()
