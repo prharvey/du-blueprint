@@ -338,7 +338,7 @@ impl Voxelizer {
             let cuboid_pos = Isometry::from(aabb.center());
             if intersection_test(&self.isometry, self.mesh.as_ref(), &cuboid_pos, &cuboid).unwrap()
             {
-                let voxel_origin = range.origin * 32;
+                let voxel_origin = range.origin * 32 / range.size.x;
                 let isometry = self.isometry.clone();
                 let mesh = self.mesh.clone();
                 let task = task::spawn(async move {
