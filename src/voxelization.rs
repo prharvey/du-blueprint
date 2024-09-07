@@ -219,6 +219,7 @@ fn voxelize_chunk(
     aabb: &Aabb,
     voxel_origin: &Point<i32>,
     material: u64,
+    is_lod: bool,
 ) -> Option<VoxelCellData> {
     // We have to over-voxelize that chunk due to the boundries expected in voxel cell data.
     // e.g. for an inner_range of [0, 0, 0] -> [32, 32, 32] the actual range of the chunk is
@@ -269,7 +270,7 @@ fn voxelize_chunk(
         }
     });
 
-    if grid.is_empty() {
+    if !is_lod && grid.is_empty() {
         return None;
     }
 
@@ -338,11 +339,19 @@ impl Voxelizer {
             let cuboid_pos = Isometry::from(aabb.center());
             if intersection_test(&self.isometry, self.mesh.as_ref(), &cuboid_pos, &cuboid).unwrap()
             {
+                let is_lod = range.size.x > 1;
                 let voxel_origin = range.origin * 32 / range.size.x;
                 let isometry = self.isometry.clone();
                 let mesh = self.mesh.clone();
                 let task = task::spawn(async move {
-                    voxelize_chunk(&isometry, &mesh, &aabb, &voxel_origin, material)
+                    voxelize_chunk(
+                        &isometry,
+                        &mesh,
+                        &aabb,
+                        &voxel_origin,
+                        material,
+                        is_lod,
+                    )
                 });
                 if range.size.x == 1 {
                     SvoReturn::Leaf(Some(task))
