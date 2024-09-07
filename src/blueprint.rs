@@ -45,7 +45,10 @@ impl VoxelData {
     }
 }
 
-fn make_voxel_data(data: &Svo<Option<VoxelCellData>>, material: u64) -> (Vec<VoxelData>, RangeZYX) {
+fn make_voxel_data(
+    data: &Svo<Option<VoxelCellData>>,
+    material: u64,
+) -> (Vec<VoxelData>, Option<RangeZYX>) {
     let mut result = Vec::new();
     let meta = data.cata(|range, v, cs| match v {
         Some(voxels) => {
@@ -76,7 +79,7 @@ fn make_voxel_data(data: &Svo<Option<VoxelCellData>>, material: u64) -> (Vec<Vox
         }
         None => AggregateMetadata::default(),
     });
-    (result, meta.heavy_current.bounding_box.unwrap())
+    (result, meta.heavy_current.bounding_box)
 }
 
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
@@ -210,6 +213,10 @@ impl Blueprint {
 
     pub fn to_construct_json(&self) -> serde_json::Value {
         let (voxel_data, bb) = make_voxel_data(&self.voxel_data, self.fill_material);
+        if bb.is_none() {
+            panic!("Construct is empty in core region.");
+        }
+        let bb = bb.unwrap();
         let mins = bb.origin.map(|v| v as f64) / 4.0;
         let maxs = mins + bb.size.map(|v| v as f64) / 4.0;
         let center = Vector::repeat(self.info.size as f32 / 2.0 + 0.125);
