@@ -11,6 +11,7 @@ use std::str::Utf8Error;
 
 use parry3d_f64::math::{Point, Vector};
 use rangemap::RangeMap;
+use serde::ser::SerializeStruct;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -369,7 +370,7 @@ fn serialize_rle(
     Ok(())
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct VertexMaterial {
     pub material: u8,
 }
@@ -415,7 +416,7 @@ impl VertexMaterial {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default, serde::Serialize)]
 pub struct VertexVoxel {
     flags: u8,
     position: [u8; 3],
@@ -516,7 +517,7 @@ impl VertexVoxel {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct RangeZYX {
     pub origin: Point<i32>,
     pub size: Vector<i32>,
@@ -625,7 +626,7 @@ impl Deserialize for RangeZYX {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize)]
 pub struct VertexGrid {
     range: RangeZYX,
     inner_range: RangeZYX,
@@ -665,7 +666,7 @@ impl VertexGrid {
             .for_each_index_range(subrange, |r| self.sparse_vertices.insert(r, voxel))
     }
 
-    pub fn calculate_metadata(&self, material_id : u64) -> HeavyMetadata {
+    pub fn calculate_metadata(&self, material_id: u64) -> HeavyMetadata {
         let mut min_pos = Point::new(i32::MAX, i32::MAX, i32::MAX);
         let mut max_pos = Point::new(i32::MIN, i32::MIN, i32::MIN);
         let mut total_materials = 0;
@@ -769,7 +770,18 @@ impl Deserialize for VertexGrid {
     }
 }
 
-#[derive(Debug, Default, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Hash,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct MaterialId {
     pub id: u64,
     pub short_name: String,
@@ -828,7 +840,18 @@ impl Deserialize for MaterialMapper {
     }
 }
 
-#[derive(Debug)]
+impl serde::Serialize for MaterialMapper {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("MaterialMapper", 1)?;
+        state.serialize_field("mapping", &Vec::from_iter(self.mapping.iter()))?;
+        state.end()
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct VoxelCellData {
     grid: VertexGrid,
     mapping: MaterialMapper,
@@ -847,7 +870,7 @@ impl VoxelCellData {
         }
     }
 
-    pub fn calculate_metadata(&self, hash: i64, material : u64) -> AggregateMetadata {
+    pub fn calculate_metadata(&self, hash: i64, material: u64) -> AggregateMetadata {
         let mut light_current = LightMetadata::default();
         let heavy_current = self.grid.calculate_metadata(material);
         light_current.vox = Some(heavy_current.material_stats.is_some());
@@ -903,7 +926,7 @@ fn int_to_maybe_bool(value: u8) -> Option<bool> {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct LightMetadata {
     vox: Option<bool>,
     r#mod: Option<bool>,
@@ -961,7 +984,7 @@ impl Deserialize for LightMetadata {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize)]
 struct Inertia {
     mass: f64,
     gravity_center: Point<f64>,
@@ -999,7 +1022,7 @@ impl Deserialize for Inertia {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize)]
 struct FixedPoint(u64);
 
 impl FixedPoint {
@@ -1107,7 +1130,26 @@ impl Deserialize for HeavyMetadata {
     }
 }
 
-#[derive(Debug)]
+impl serde::Serialize for HeavyMetadata {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("HeavyMetadata", 5)?;
+        state.serialize_field("bounding_box", &self.bounding_box)?;
+        let linear_material_stats = self
+            .material_stats
+            .as_ref()
+            .map(|v| Vec::from_iter(v.iter()));
+        state.serialize_field("material_stats", &linear_material_stats)?;
+        state.serialize_field("inertia", &self.inertia)?;
+        state.serialize_field("server_timestamp", &self.server_timestamp)?;
+        state.serialize_field("server_previous_version", &self.server_previous_version)?;
+        state.end()
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
 pub struct AggregateMetadata {
     pub light_current: LightMetadata,
     light_children: Vec<LightMetadata>, // 8

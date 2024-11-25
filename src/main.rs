@@ -159,12 +159,18 @@ fn main() {
         Commands::ParseVoxel { b64 } => {
             let bytes = base64::prelude::BASE64_STANDARD.decode(b64).unwrap();
             let voxel = VoxelCellData::decompress(&bytes);
-            println!("{:#?}", voxel);
+            match voxel {
+                Ok(voxel) => println!("{:#?}", serde_json::to_string(&voxel)),
+                Err(_) => println!("{:#?}", voxel),
+            }
         }
         Commands::ParseMeta { b64 } => {
             let bytes = base64::prelude::BASE64_STANDARD.decode(b64).unwrap();
             let meta = AggregateMetadata::decompress(&bytes);
-            println!("{:#?}", meta);
+            match meta {
+                Ok(meta) => println!("{:#?}", serde_json::to_string(&meta)),
+                Err(_) => println!("{:#?}", meta),
+            }
         }
     }
 }
